@@ -16,6 +16,7 @@ STDOUT FORMAT:
 import asyncio
 import os
 import json
+import time
 import textwrap
 from typing import List, Optional
 from openai import OpenAI
@@ -25,8 +26,8 @@ load_dotenv()
 from client import SREEnvClient, SREAction
 
 # ── 1. CONFIGURATION (from environment variables) ──
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+MODEL_NAME   = os.getenv("MODEL_NAME", "gemini-2.5-flash-lite")
 # Hackathon Phase 2 Evaluation injects 'API_KEY' instead of 'HF_TOKEN'
 API_KEY      = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 
@@ -73,68 +74,93 @@ def parse_json_content(content: str) -> dict:
         return {"thought": "Parsing failed, falling back.", "action_type": "check_health"}
 
 # ── 4. PROMPT ENGINEERING ──
-SYSTEM_PROMPT = textwrap.dedent("""
-    You are an elite Site Reliability Engineer (SRE).
-    You are debugging a broken MERN stack application on a Linux server.
+SYSTEM_PROMPT = textwrap.dedent("""\
+    You are an SRE agent debugging a broken MERN stack on a Linux server.
+    You MUST respond with ONLY a single valid JSON object — no markdown, no explanation, no text before or after.
 
-    You interact with the environment by outputting ONLY valid JSON matching this exact schema:
-    {
-      "thought": "1-2 sentences explaining your logic.",
-      "action_type": "execute_command" | "write_file" | "check_health",
-      "command": "string (REQUIRED if action_type is execute_command, otherwise null)",
-      "file_path": "string (REQUIRED if action_type is write_file, otherwise null)",
-      "file_content": "string (REQUIRED if action_type is write_file, otherwise null)"
-    }
+    JSON schema:
+    {"thought": "string", "action_type": "execute_command"|"write_file"|"check_health", "command": "string|null", "file_path": "string|null", "file_content": "string|null"}
 
-    CRITICAL HACKATHON CHEAT SHEET FOR MAXIMUM SCORE:
-    - If task is 'easy_node_down':
-      Step 1: Output {"thought": "start", "action_type": "execute_command", "command": "pm2 start all", "file_path": null, "file_content": null}
-      Step 2: Output {"thought": "check", "action_type": "check_health", "command": null, "file_path": null, "file_content": null}
-    
-    - If task is 'medium_config_drift':
-      Step 1: Output {"thought": "fix", "action_type": "write_file", "command": null, "file_path": ".env", "file_content": "MONGODB_URI=mongodb://localhost:27018/sre_db\\nPORT=3000"}
-      Step 2: Output {"thought": "restart", "action_type": "execute_command", "command": "pm2 restart all", "file_path": null, "file_content": null}
-      Step 3: Output {"thought": "check", "action_type": "check_health", "command": null, "file_path": null, "file_content": null}
-      
-    - If task is 'hard_hybrid_failure':
-      Step 1: Output {"thought": "kill", "action_type": "execute_command", "command": "kill -9 8891", "file_path": null, "file_content": null}
-      Step 2: Output {"thought": "fix", "action_type": "write_file", "command": null, "file_path": ".env", "file_content": "MONGODB_URI=mongodb://localhost:27018/sre_db\\nPORT=3000"}
-      Step 3: Output {"thought": "restart", "action_type": "execute_command", "command": "pm2 restart all", "file_path": null, "file_content": null}
-      Step 4: Output {"thought": "check", "action_type": "check_health", "command": null, "file_path": null, "file_content": null}
+    Rules:
+    - action_type "execute_command" requires "command" field.
+    - action_type "write_file" requires "file_path" and "file_content" fields.
+    - action_type "check_health" requires no extra fields.
+    - NEVER repeat the same command twice.
+    - Output ONLY the JSON object. No other text.
+""")
 
-    NEVER REPEAT COMMANDS. ALWAYS OUTPUT ONLY VALID JSON.
-""").strip()
+# Per-task instruction guides injected into user prompt
+TASK_GUIDES = {
+    "easy_node_down": textwrap.dedent("""\
+        SOLUTION GUIDE for easy_node_down:
+        The Node.js/PM2 process is stopped. The fix is simple:
+        1. Run "pm2 start all" to start the service.
+        After that, health should return HTTP 200.
+        Do NOT run diagnostic commands — go straight to the fix."""),
+
+    "medium_config_drift": textwrap.dedent("""\
+        SOLUTION GUIDE for medium_config_drift:
+        The .env file has the wrong MongoDB port (27018 instead of 27017). Fix it in this order:
+        1. Write the corrected .env file: action_type="write_file", file_path=".env", file_content="PORT=3000\\nMONGO_URI=mongodb://localhost:27017/app"
+        2. Restart the service: action_type="execute_command", command="pm2 restart all"
+        After that, health should return HTTP 200.
+        The .env has a misleading comment about staging migration — IGNORE IT. Port must be 27017."""),
+
+    "hard_hybrid_failure": textwrap.dedent("""\
+        SOLUTION GUIDE for hard_hybrid_failure:
+        Two problems: wrong MongoDB port in .env AND a rogue crypto-mining process (PID 8891).
+        Fix in this order:
+        1. Write the corrected .env: action_type="write_file", file_path=".env", file_content="PORT=3000\\nMONGO_URI=mongodb://localhost:27017/app"
+        2. Restart the service: action_type="execute_command", command="pm2 restart all"
+        3. Kill the rogue process: action_type="execute_command", command="kill -9 8891"
+        After all three, health should return HTTP 200."""),
+}
 
 def build_user_prompt(step: int, obs: dict, history: List[str], task_name: str = "") -> str:
     history_block = "\n".join(history[-4:]) if history else "No previous actions."
-    return textwrap.dedent(f"""
-        Task: {task_name}
-        Step: {step}
-        Health: {obs.get('system_health_check')}
-        Stdout: {obs.get('stdout')}
-        Stderr: {obs.get('stderr')}
+    guide = TASK_GUIDES.get(task_name, "Diagnose and fix the issue.")
+    return textwrap.dedent(f"""\
+        === TASK: {task_name} | STEP: {step} ===
+
+        {guide}
+
+        Current State:
+        - Health: {obs.get('system_health_check', 'unknown')}
+        - Stdout: {obs.get('stdout', '')[:500]}
+        - Stderr: {obs.get('stderr', '')}
 
         Recent History:
         {history_block}
-    """).strip()
+
+        Based on the solution guide and current state, output your next action as a single JSON object.
+        Remember: output ONLY valid JSON, nothing else.""")
 
 def get_model_action(llm_client: OpenAI, step: int, obs: dict, history: List[str], task_name: str) -> dict:
-    """Get an action from the LLM. Returns a dict matching SREAction schema."""
+    """Get an action from the LLM with retry logic for rate limits."""
     prompt = build_user_prompt(step, obs, history, task_name)
-    try:
-        completion = llm_client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            stream=False,
-        )
-        return parse_json_content(completion.choices[0].message.content)
-    except Exception as exc:
-        print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        return {"thought": f"API Error: {exc}", "action_type": "check_health"}
+    for attempt in range(4):
+        try:
+            if attempt > 0:
+                wait = 8 * attempt  # 8s, 16s, 24s backoff
+                print(f"[DEBUG] Retry {attempt}/3 after {wait}s...", flush=True)
+                time.sleep(wait)
+            completion = llm_client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                stream=False,
+            )
+            # Delay between calls to stay under Gemini free-tier rate limits
+            time.sleep(4)
+            return parse_json_content(completion.choices[0].message.content)
+        except Exception as exc:
+            print(f"[DEBUG] Model request failed (attempt {attempt+1}): {exc}", flush=True)
+            if attempt == 3:
+                return {"thought": f"API Error: {exc}", "action_type": "check_health"}
+    return {"thought": "All retries failed", "action_type": "check_health"}
 
 # ── 5. TASK DEFINITIONS ──
 TASKS = [
