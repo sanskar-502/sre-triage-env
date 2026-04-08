@@ -1,0 +1,4 @@
+spec_version: 1
+environment_id: sre_mern_triage
+description: A deterministic MERN stack triage simulator for SRE agents.
+docker_image: sre-mern-env:latest
