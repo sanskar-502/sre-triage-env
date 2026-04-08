@@ -162,8 +162,6 @@ def get_model_action(llm_client: OpenAI, step: int, obs: dict, history: List[str
                 temperature=0.0,
                 stream=False,
             )
-            # Delay between calls to stay under Gemini free-tier rate limits
-            time.sleep(4)
             return parse_json_content(completion.choices[0].message.content)
         except Exception as exc:
             print(f"[DEBUG] Model request failed (attempt {attempt+1}): {exc}", flush=True)
@@ -182,13 +180,17 @@ TASKS = [
 async def main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    try:
-        # Tries to spawn the environment container (works locally and in some evaluators)
-        env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
-    except Exception as e:
-        print(f"[DEBUG] Docker daemon unavailable ({e}). Falling back to localhost HTTP...", flush=True)
-        # In strict Hackathon Phase 2, the evaluator prespawns the container and exposes it
-        env = SREEnvClient(base_url=os.getenv("ENV_URL", "http://localhost:7860"))
+    env_url = os.getenv("ENV_URL")
+
+    if env_url:
+        # Evaluator prespawns the container — connect directly
+        env = SREEnvClient(base_url=env_url)
+    else:
+        try:
+            env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
+        except Exception as e:
+            print(f"[DEBUG] Docker unavailable ({e}). Falling back to localhost...", flush=True)
+            env = SREEnvClient(base_url="http://localhost:7860")
 
     report = []
 
