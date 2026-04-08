@@ -244,11 +244,11 @@ async def main() -> None:
                     if done:
                         break
 
-                # Score: 1.0 if resolved, 0.0 otherwise — clamped to [0, 1]
+                # Score: clamped strictly to (0.0, 1.0) to pass Hackathon Task Validator bounds
                 if result.done and "200" in obs.get('system_health_check', ''):
-                    score = 1.0
+                    score = 0.99
                     success = True
-                score = min(max(score, 0.0), 1.0)
+                score = min(max(score, 0.01), 0.99)
 
             except Exception as e:
                 print(f"[DEBUG] Task {task_name} error: {e}", flush=True)
