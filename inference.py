@@ -146,8 +146,13 @@ TASKS = [
 async def main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-    # Use OpenEnv's from_docker_image() to launch the environment container
-    env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
+    try:
+        # Tries to spawn the environment container (works locally and in some evaluators)
+        env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
+    except Exception as e:
+        print(f"[DEBUG] Docker daemon unavailable ({e}). Falling back to localhost HTTP...", flush=True)
+        # In strict Hackathon Phase 2, the evaluator prespawns the container and exposes it
+        env = SREEnvClient(base_url=os.getenv("ENV_URL", "http://localhost:7860"))
 
     report = []
 
