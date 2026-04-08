@@ -5,7 +5,7 @@ from models import SREAction, ActionType
 def test_difficulty(name, env, actions, expect_done=True):
     """Run a task and verify it resolves correctly."""
     print(f"\n{'='*50}")
-    print(f"🔄 TEST: {name}")
+    print(f" TEST: {name}")
     print(f"{'='*50}")
     obs = env.reset()
     print(f"  Initial Health: {obs.system_health_check}")
@@ -23,7 +23,7 @@ def test_difficulty(name, env, actions, expect_done=True):
     assert obs.done == expect_done, f"Expected done={expect_done}, got {obs.done}"
     if expect_done:
         assert obs.system_health_check == "HTTP 200 OK", f"Expected HTTP 200, got {obs.system_health_check}"
-    print(f"  ✅ PASSED")
+    print(f"  PASSED")
 
 # ── Test Easy Mode ──
 test_difficulty("Easy — Node service stopped", SREEnvironment(difficulty="easy"), [
@@ -48,7 +48,7 @@ test_difficulty("Hard — Hybrid failure", SREEnvironment(difficulty="hard"), [
 
 # ── Test Dynamic Reset ──
 print(f"\n{'='*50}")
-print(f"🔄 TEST: Dynamic reset(difficulty)")
+print(f" TEST: Dynamic reset(difficulty)")
 print(f"{'='*50}")
 env = SREEnvironment()
 for diff, expected_health in [("easy", "503"), ("medium", "500"), ("hard", "500")]:
@@ -60,36 +60,36 @@ for diff, expected_health in [("easy", "503"), ("medium", "500"), ("hard", "500"
         print(f"  Hard  → {obs.system_health_check} + rogue PID ✓")
     else:
         print(f"  {diff.capitalize():7s}→ {obs.system_health_check} ✓")
-print(f"  ✅ PASSED")
+print(f"  PASSED")
 
 # ── Test Step Penalty ──
 print(f"\n{'='*50}")
-print(f"🔄 TEST: Step penalty & repeat penalty")
+print(f" TEST: Step penalty & repeat penalty")
 print(f"{'='*50}")
 env = SREEnvironment(difficulty="easy")
 obs1 = env.step(SREAction(action_type=ActionType.CHECK_HEALTH))
 assert obs1.reward < 0, f"Step cost should make check_health negative, got {obs1.reward}"
-print(f"  ✅ Step penalty works (check_health reward: {obs1.reward:.2f})")
+print(f"  Step penalty works (check_health reward: {obs1.reward:.2f})")
 
 obs2 = env.step(SREAction(action_type=ActionType.EXECUTE_COMMAND, command="pm2 status"))
 obs3 = env.step(SREAction(action_type=ActionType.EXECUTE_COMMAND, command="pm2 status"))
 assert obs3.reward < obs2.reward, f"Repeat should be penalized more"
-print(f"  ✅ Repeat penalty works (first: {obs2.reward:.2f}, repeat: {obs3.reward:.2f})")
+print(f"   Repeat penalty works (first: {obs2.reward:.2f}, repeat: {obs3.reward:.2f})")
 
 # ── Test Red Herrings ──
 print(f"\n{'='*50}")
-print(f"🔄 TEST: Realistic logs with noise")
+print(f" TEST: Realistic logs with noise")
 print(f"{'='*50}")
 env = SREEnvironment(difficulty="medium")
 obs = env.step(SREAction(action_type=ActionType.EXECUTE_COMMAND, command="cat logs/error.log"))
 assert "DeprecationWarning" in obs.stdout, "Logs should contain red herring warnings"
 assert "2024-01-15" in obs.stdout, "Logs should contain timestamps"
-print(f"  ✅ Logs contain timestamps and red herrings")
+print(f"  Logs contain timestamps and red herrings")
 env2 = SREEnvironment(difficulty="medium")
 obs2 = env2.step(SREAction(action_type=ActionType.EXECUTE_COMMAND, command="cat .env"))
 assert "staging migration" in obs2.stdout, ".env should have misleading comment"
-print(f"  ✅ .env contains misleading comment about staging")
+print(f"   .env contains misleading comment about staging")
 
 print(f"\n{'='*50}")
-print(f"🎉 ALL TESTS PASSED")
+print(f" ALL TESTS PASSED")
 print(f"{'='*50}")

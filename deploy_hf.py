@@ -13,9 +13,9 @@ try:
         exist_ok=True,
         private=False,
     )
-    print(f"✅ Space created/exists: https://huggingface.co/spaces/{REPO_ID}")
+    print(f" Space created/exists: https://huggingface.co/spaces/{REPO_ID}")
 except Exception as e:
-    print(f"⚠️ create_repo: {e}")
+    print(f" create_repo: {e}")
 
 # Upload all project files
 api = HfApi()
@@ -41,10 +41,10 @@ for root, dirs, files in os.walk("."):
                 repo_id=REPO_ID,
                 repo_type="space",
             )
-            print(f"  📤 {repo_path}")
+            print(f"  {repo_path}")
             files_uploaded += 1
         except Exception as e:
-            print(f"  ❌ {repo_path}: {e}")
+            print(f"  {repo_path}: {e}")
 
-print(f"\n✅ Uploaded {files_uploaded} files to https://huggingface.co/spaces/{REPO_ID}")
-print("🚀 Space will build automatically. Check the URL above in ~2 minutes.")
+print(f"\n Uploaded {files_uploaded} files to https://huggingface.co/spaces/{REPO_ID}")
+print(" Space will build automatically. Check the URL above in ~2 minutes.")

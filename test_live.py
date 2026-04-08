@@ -36,7 +36,7 @@ try:
     print("-" * 50)
     
     if r.status_code == 200 and r2.status_code == 200 and r3.status_code == 200:
-        print("\n✅ ALL LIVE ENDPOINTS ARE WORKING PERFECTLY! ✅")
+        print("\n ALL LIVE ENDPOINTS ARE WORKING PERFECTLY! ")
         
 except Exception as e:
-    print(f"\n❌ ERROR: {str(e)}")
+    print(f"\n ERROR: {str(e)}")

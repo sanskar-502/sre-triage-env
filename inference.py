@@ -24,16 +24,12 @@ from openai import OpenAI
 from client import SREEnvClient, SREAction
 
 # ── 1. CONFIGURATION ──
-# Matches evaluator explicit instructions
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
 API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gemini-2.5-flash-lite")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-# Strict check as recommended by discriminator
 if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
-    # Under evaluator environment, explicitly match their syntax recommendation
-    # (Sometimes automated AST checkers look for this specific string)
     API_BASE_URL = os.environ["API_BASE_URL"]
     API_KEY = os.environ["API_KEY"]
 
@@ -173,8 +169,6 @@ TASKS = [
 
 # ── 6. MAIN EXECUTION ──
 async def main() -> None:
-    # Fetch dynamically at RUNTIME. If the evaluator imports this file before injecting env vars,
-    # global evaluation misses the injects.
     api_base = os.environ.get("API_BASE_URL", API_BASE_URL)
     api_key = os.environ.get("API_KEY", API_KEY)
     
@@ -187,14 +181,12 @@ async def main() -> None:
         env = SREEnvClient(base_url=env_url)
     else:
         try:
-            # Match Hackathon instructions string for image parameter properly
             platform_image = os.environ.get("LOCAL_IMAGE_NAME") or os.environ.get("IMAGE_NAME")
             env = await SREEnvClient.from_docker_image(platform_image or "sre-mern-env:latest")
         except Exception as e:
             print(f"[DEBUG] Docker unavailable ({e}). Falling back to localhost...", flush=True)
             env = SREEnvClient(base_url="http://localhost:7860")
             
-    # Force a quick connection test with backoff for local Docker spooling.
     for attempt in range(5):
         try:
             await env.reset(difficulty="easy")

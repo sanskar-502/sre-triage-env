@@ -15,7 +15,7 @@ class SREEnvClient(EnvClient[SREAction, SREObservation, SREState]):
         Overrides the base reset to pass difficulty as a JSON body
         parameter to the /reset endpoint, enabling multi-task evaluation.
         """
-        # Support both manual __init__(base_url=...) and from_docker_image() construction
+
         base_url = getattr(self, '_base_url', None) or getattr(self, 'base_url', "http://localhost:7860")
         async with httpx.AsyncClient() as http:
             response = await http.post(

@@ -11,7 +11,7 @@ from models import SREAction, SREObservation
 env_instance = SREEnvironment()
 
 app = create_fastapi_app(
-    env=lambda: env_instance,  # Use shared instance so reset(difficulty) persists
+    env=lambda: env_instance,  
     action_cls=SREAction,
     observation_cls=SREObservation
 )
