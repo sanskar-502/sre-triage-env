@@ -1,4 +1,5 @@
 spec_version: 1
+name: sre_mern_triage
 environment_id: sre_mern_triage
 description: >
   A deterministic MERN stack triage simulator for SRE agents.
