@@ -27,13 +27,14 @@ from client import SREEnvClient, SREAction
 # ── 1. CONFIGURATION (from environment variables) ──
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")
+# Hackathon Phase 2 Evaluation injects 'API_KEY' instead of 'HF_TOKEN'
+API_KEY      = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 
 # Optional — if you use from_docker_image():
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-if not HF_TOKEN:
-    raise ValueError("HF_TOKEN is missing! Set it in your environment variables.")
+if not API_KEY:
+    raise ValueError("API_KEY or HF_TOKEN is missing! Set it in your environment variables.")
 
 MAX_STEPS = 10
 
@@ -144,7 +145,7 @@ TASKS = [
 
 # ── 6. MAIN EXECUTION ──
 async def main() -> None:
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     try:
         # Tries to spawn the environment container (works locally and in some evaluators)
