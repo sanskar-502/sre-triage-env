@@ -16,6 +16,10 @@ app = create_fastapi_app(
     observation_cls=SREObservation
 )
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "SRE Triage Simulator Running"}
+
 # Override /reset to accept difficulty parameter
 @app.post("/reset")
 async def reset_with_difficulty(request: Request):
