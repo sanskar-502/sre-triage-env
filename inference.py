@@ -153,7 +153,8 @@ def get_model_action(llm_client: OpenAI, step: int, obs: dict, history: List[str
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.0,
+                temperature=0.7,
+                max_tokens=300,
                 stream=False,
             )
             return parse_json_content(completion.choices[0].message.content)
@@ -186,10 +187,22 @@ async def main() -> None:
         env = SREEnvClient(base_url=env_url)
     else:
         try:
-            env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
+            # Match Hackathon instructions string for image parameter properly
+            platform_image = os.environ.get("LOCAL_IMAGE_NAME") or os.environ.get("IMAGE_NAME")
+            env = await SREEnvClient.from_docker_image(platform_image or "sre-mern-env:latest")
         except Exception as e:
             print(f"[DEBUG] Docker unavailable ({e}). Falling back to localhost...", flush=True)
             env = SREEnvClient(base_url="http://localhost:7860")
+            
+    # Force a quick connection test with backoff for local Docker spooling.
+    for attempt in range(5):
+        try:
+            await env.reset(difficulty="easy")
+            break
+        except Exception as e:
+            if attempt == 4:
+                raise RuntimeError(f"FATAL: Environment container is unreachable. {e}")
+            await asyncio.sleep(1.0)
 
     report = []
 
