@@ -1,40 +1,62 @@
+# inference.py — Baseline Agent with Multi-Task Evaluation Loop
+"""
+SRE Triage Simulator - Inference Script
+========================================
+MANDATORY ENVIRONMENT VARIABLES:
+    API_BASE_URL       The API endpoint for the LLM.
+    MODEL_NAME         The model identifier to use for inference.
+    HF_TOKEN           Your Hugging Face / API key.
+    LOCAL_IMAGE_NAME   The Docker image name for the environment.
+
+STDOUT FORMAT:
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+"""
+import asyncio
 import os
 import json
-import asyncio
 import textwrap
 from typing import List, Optional
 from openai import OpenAI
-from dotenv import load_dotenv  # Add this
+from dotenv import load_dotenv
 load_dotenv()
 
 from client import SREEnvClient, SREAction
 
-# --- 1. CONFIGURATION & ENVIRONMENT ---
+# ── 1. CONFIGURATION (from environment variables) ──
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HF_API_TOKEN")
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")
+
+# Optional — if you use from_docker_image():
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 if not HF_TOKEN:
     raise ValueError("HF_TOKEN is missing! Set it in your environment variables.")
 
-client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+MAX_STEPS = 10
 
-# --- 2. LOGGING UTILITIES (STRICT FORMAT) ---
+# ── 2. MANDATORY LOGGING FORMAT ──
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-def log_step(step: int, action: dict, reward: float, done: bool, error: Optional[str]) -> None:
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
-    action_str = json.dumps(action).replace('\n', '')
-    print(f"[STEP] step={step} action={action_str} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    success_val = str(success).lower()
-    print(f"[END] success={success_val} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
-# --- 3. HELPER: ROBUST JSON PARSER ---
+# ── 3. ROBUST JSON PARSER ──
 def parse_json_content(content: str) -> dict:
     clean_content = content.strip()
     if "```" in clean_content:
@@ -49,33 +71,38 @@ def parse_json_content(content: str) -> dict:
     except json.JSONDecodeError:
         return {"thought": "Parsing failed, falling back.", "action_type": "check_health"}
 
-# --- 4. PROMPT ENGINEERING ---
+# ── 4. PROMPT ENGINEERING ──
 SYSTEM_PROMPT = textwrap.dedent("""
     You are an elite Site Reliability Engineer (SRE).
     You are debugging a broken MERN stack application on a Linux server.
 
     You interact with the environment by outputting ONLY valid JSON matching this exact schema:
     {
-      "thought": "1-2 sentences explaining your logic and what you are trying to achieve.",
+      "thought": "1-2 sentences explaining your logic.",
       "action_type": "execute_command" | "write_file" | "check_health",
       "command": "string (REQUIRED if action_type is execute_command, otherwise null)",
       "file_path": "string (REQUIRED if action_type is write_file, otherwise null)",
       "file_content": "string (REQUIRED if action_type is write_file, otherwise null)"
     }
 
-    CRITICAL DIRECTIVES - READ CAREFULLY:
-    1. NEVER REPEAT COMMANDS: If you just ran 'cat .env', DO NOT run it again. You must take a new action or fix the file.
-    2. THE SRE WORKFLOW: 
-       - If logs show a database connection error, DO NOT just stare at the .env file.
-       - You MUST run 'netstat' or 'ss' to find out what port MongoDB is ACTUALLY listening on (usually 27017).
-       - Once you find the discrepancy, use "action_type": "write_file" to fix the .env file to match the real port.
-    3. APPLY CHANGES: After using write_file, you MUST restart the application using 'pm2 restart all' with "execute_command".
-    4. STRICT ACTION TYPES: Use "execute_command" for bash commands. "check_health" takes no arguments and just checks if the site is back online.
+    CRITICAL DIRECTIVES:
+    1. NEVER REPEAT COMMANDS. If you already ran a command, take a NEW action based on its output.
+    2. DIAGNOSTIC WORKFLOW:
+       a. Check service status: 'pm2 status'
+       b. If services are stopped → 'pm2 start all'
+       c. If running but unhealthy → read logs: 'cat logs/error.log'
+       d. If DB connection error → check real ports: 'netstat -tlnp'
+       e. If port mismatch → read config: 'cat .env', then fix with write_file
+       f. After write_file → ALWAYS restart: 'pm2 restart all'
+       g. If rogue high-CPU process → 'kill -9 <PID>'
+    3. USE ONLY 'execute_command', 'write_file', or 'check_health'.
+    4. DO NOT install packages. Use existing tools: pm2, netstat, ps, cat, kill, lsof.
 """).strip()
 
-def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
+def build_user_prompt(step: int, obs: dict, history: List[str], task_name: str = "") -> str:
     history_block = "\n".join(history[-4:]) if history else "No previous actions."
     return textwrap.dedent(f"""
+        Task: {task_name}
         Step: {step}
         Health: {obs.get('system_health_check')}
         Stdout: {obs.get('stdout')}
@@ -85,75 +112,115 @@ def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
         {history_block}
     """).strip()
 
-# --- 5. MAIN EXECUTION LOOP ---
-MAX_STEPS = 10
+def get_model_action(llm_client: OpenAI, step: int, obs: dict, history: List[str], task_name: str) -> dict:
+    """Get an action from the LLM. Returns a dict matching SREAction schema."""
+    prompt = build_user_prompt(step, obs, history, task_name)
+    try:
+        completion = llm_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            stream=False,
+        )
+        return parse_json_content(completion.choices[0].message.content)
+    except Exception as exc:
+        print(f"[DEBUG] Model request failed: {exc}", flush=True)
+        return {"thought": f"API Error: {exc}", "action_type": "check_health"}
 
-async def main():
-    task_name = os.getenv("SRE_TASK", "medium_config_drift")
-    env_name = "sre_mern_triage"
-    log_start(task=task_name, env=env_name, model=MODEL_NAME)
-    
-    history, rewards = [], []
-    steps_taken, score, success = 0, 0.0, False
+# ── 5. TASK DEFINITIONS ──
+TASKS = [
+    {"name": "easy_node_down",      "difficulty": "easy"},
+    {"name": "medium_config_drift", "difficulty": "medium"},
+    {"name": "hard_hybrid_failure", "difficulty": "hard"},
+]
 
-    local_url = "http://127.0.0.1:8000"
-    async with SREEnvClient(base_url=local_url) as env:
-        result = await env.reset()
-        obs = result.observation.model_dump()
-        
-        for step in range(1, MAX_STEPS + 1):
-            if result.done: break
-                
-            prompt = build_user_prompt(step, obs, history)
+# ── 6. MAIN EXECUTION ──
+async def main() -> None:
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+
+    # Use OpenEnv's from_docker_image() to launch the environment container
+    env = await SREEnvClient.from_docker_image(LOCAL_IMAGE_NAME or "sre-mern-env:latest")
+
+    report = []
+
+    try:
+        for task_info in TASKS:
+            task_name  = task_info["name"]
+            difficulty = task_info["difficulty"]
+            env_name   = "sre_mern_triage"
+
+            history: List[str] = []
+            rewards: List[float] = []
+            steps_taken = 0
+            score = 0.0
+            success = False
+
+            log_start(task=task_name, env=env_name, model=MODEL_NAME)
+
             try:
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.1,
-                )
-                action_dict = parse_json_content(response.choices[0].message.content)
-            except Exception as e:
-                action_dict = {"thought": f"API Error: {e}", "action_type": "check_health"}
-
-            try:
-                action_obj = SREAction(**action_dict)
-                result = await env.step(action_obj)
+                result = await env.reset(difficulty=difficulty)
                 obs = result.observation.model_dump()
-                step_reward = result.reward or 0.0
-                step_error = None
+
+                for step in range(1, MAX_STEPS + 1):
+                    if result.done:
+                        break
+
+                    action_dict = get_model_action(llm_client, step, obs, history, task_name)
+                    action_str = json.dumps(action_dict).replace('\n', '')
+
+                    try:
+                        action_obj = SREAction(**action_dict)
+                        result = await env.step(action_obj)
+                        obs = result.observation.model_dump()
+                        reward = result.reward or 0.0
+                        done = result.done
+                        error = None
+                    except Exception as e:
+                        reward, error = -0.05, str(e)
+                        done = False
+                        obs = {"stdout": "", "stderr": f"Error: {e}", "system_health_check": "ERROR"}
+
+                    rewards.append(reward)
+                    steps_taken = step
+
+                    log_step(step=step, action=action_str, reward=reward, done=done, error=error)
+                    history.append(f"Step {step}: {action_dict.get('thought', 'Acting')}")
+
+                    if done:
+                        break
+
+                # Score: 1.0 if resolved, 0.0 otherwise — clamped to [0, 1]
+                if result.done and "200" in obs.get('system_health_check', ''):
+                    score = 1.0
+                    success = True
+                score = min(max(score, 0.0), 1.0)
+
             except Exception as e:
-                step_reward, step_error = -0.05, str(e)
-                obs = {"stdout": "", "stderr": f"Error: {e}", "system_health_check": "ERROR"}
+                print(f"[DEBUG] Task {task_name} error: {e}", flush=True)
 
-            rewards.append(step_reward)
-            steps_taken = step
-            log_step(step, action_dict, step_reward, result.done, step_error)
-            history.append(f"Step {step}: {action_dict.get('thought', 'Acting')}")
+            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+            report.append({"task": task_name, "success": success, "score": score, "steps": steps_taken})
 
-            if result.done: break
+    finally:
+        try:
+            await env.close()
+        except Exception as e:
+            print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
 
-        # Scoring Logic
-        if result.done and obs.get('system_health_check') == "HTTP 200 OK":
-            score = 1.0
-            success = True
+    # ── Baseline Report Card ──
+    print(f"\n{'='*60}")
+    print("📊 BASELINE EVALUATION REPORT CARD")
+    print(f"{'='*60}")
+    for r in report:
+        status = "✅ PASS" if r["success"] else "❌ FAIL"
+        print(f"  {r['task']:30s} {status}  Score: {r['score']:.1f}  Steps: {r['steps']}")
+    aggregate = sum(r["score"] for r in report) / len(report) if report else 0.0
+    print(f"\n  {'AGGREGATE SCORE':30s} {aggregate:.3f}")
+    print(f"{'='*60}")
 
-    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
-
-
-
-
-
-
-
-
-

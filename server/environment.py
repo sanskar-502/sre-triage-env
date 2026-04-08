@@ -2,8 +2,9 @@
 import uuid
 from openenv.core.env_server import Environment
 from models import SREAction, SREObservation, SREState, ActionType
-from dotenv import load_dotenv  # Add this
+from dotenv import load_dotenv
 load_dotenv()
+
 
 class SREEnvironment(Environment):
     def __init__(self, difficulty: str = "medium"):
@@ -11,28 +12,43 @@ class SREEnvironment(Environment):
         self._discovered_categories = set()
         self.reset()
 
-    def reset(self) -> SREObservation:
+    def reset(self, difficulty: str = None) -> SREObservation:
+        """Reset the environment. Accepts an optional difficulty to switch tasks."""
+        if difficulty:
+            self.difficulty = difficulty
+
         self._episode_id = str(uuid.uuid4())
         self._step_count = 0
         self._is_resolved = False
         self._current_dir = "/var/www/mern-app"
-        self._discovered_categories = set() 
-        
-        # --- State Machine Variables ---
-        self.node_running = True
-        self.mongo_port = 27018 if self.difficulty == "medium" else 27017
-        self.rogue_pid_active = True if self.difficulty == "hard" else False
-        
-        # NEW: Tracks if the file is edited, but service hasn't restarted yet
-        self.env_fixed_in_file = False 
-        
-        health = self._run_health_check()
-        return self._build_observation("Terminal session started. Type commands to investigate.", "", 0, health, 0.0, False)
+        self._discovered_categories = set()
+        self.env_fixed_in_file = False
+        self._last_command = None  # Track for repeat-command penalty
 
+        # ── Three-Tiered State Initialization ──
+        if self.difficulty == "easy":
+            self.node_running = False
+            self.mongo_port = 27017
+            self.rogue_pid_active = False
+        elif self.difficulty == "hard":
+            self.node_running = True
+            self.mongo_port = 27018
+            self.rogue_pid_active = True
+        else:
+            self.node_running = True
+            self.mongo_port = 27018
+            self.rogue_pid_active = False
+
+        health = self._run_health_check()
+        return self._build_observation(
+            "Terminal session started. Type commands to investigate.", "", 0, health, 0.0, False
+        )
+
+    # ── OpenEnv Step ──
     def step(self, action: SREAction) -> SREObservation:
         self._step_count += 1
         reward = 0.0
-        
+
         if action.action_type == ActionType.EXECUTE_COMMAND:
             stdout, stderr, exit_code, step_reward = self._handle_command(action.command)
             reward += step_reward
@@ -44,103 +60,255 @@ class SREEnvironment(Environment):
         else:
             stdout, stderr, exit_code, reward = "", "Invalid Action Enum", 1, -0.1
 
+        # ── Step cost: encourage efficiency ──
+        reward -= 0.02
+
         current_health = self._run_health_check()
         done = False
         if current_health == "HTTP 200 OK":
             self._is_resolved = True
             done = True
-            reward += 1.0  
+            reward += 1.0
+        elif self._step_count >= 15:
+            done = True  # Timeout — episode ends without success
 
         return self._build_observation(stdout, stderr, exit_code, current_health, reward, done)
 
+    # ── Deterministic Programmatic Grader ──
     def _run_health_check(self) -> str:
-        if not self.node_running: return "HTTP 502 Bad Gateway"
-        if self.mongo_port != 27017: return "HTTP 500 Internal Server Error"
-        if self.rogue_pid_active: return "HTTP 504 Gateway Timeout"
+        if not self.node_running:
+            return "HTTP 503 Service Unavailable"
+        if self.mongo_port != 27017:
+            return "HTTP 500 Internal Server Error"
+        if self.rogue_pid_active:
+            return "HTTP 504 Gateway Timeout"
         return "HTTP 200 OK"
 
+    # ── Command Router ──
     def _handle_command(self, cmd: str):
         cmd_lower = (cmd or "").strip().lower()
+
+        # ── Repeat-command penalty ──
+        if cmd_lower == self._last_command:
+            self._last_command = cmd_lower
+            return "", "Warning: Identical command repeated. Try a different approach.", 0, -0.1
+        self._last_command = cmd_lower
 
         def get_discovery_reward(category: str, value: float) -> float:
             if category not in self._discovered_categories:
                 self._discovered_categories.add(category)
                 return value
-            return 0.0 
+            return 0.0
 
         # --- 1. Deflections & Constraints ---
         if any(bad in cmd_lower for bad in ["rm ", "drop"]):
             return "", "bash: permission denied: destructive actions are blocked.", 1, -0.2
-            
+
         if "apt" in cmd_lower or "yum" in cmd_lower:
             return "", "bash: apt: permission denied. Use existing tools: netstat, ps, cat, lsof.", 1, -0.1
 
+        # --- 2. MongoDB Service Inspection ---
         if any(x in cmd_lower for x in ["systemctl status mongod", "service mongod status", "mongod.log"]):
-            return "mongod.service - MongoDB Database Server\n   Active: active (running)\n   Main PID: 452 (mongod)\n   Status: 'Waiting for connections on port 27017'", "", 0, 0.1
+            return (
+                "mongod.service - MongoDB Database Server\n"
+                "   Active: active (running) since Mon 2024-01-15 03:22:17 UTC; 2h ago\n"
+                "   Main PID: 452 (mongod)\n"
+                "   Tasks: 23 (limit: 4915)\n"
+                "   Memory: 68.2M\n"
+                "   Status: 'Waiting for connections on port 27017'"
+            ), "", 0, 0.1
 
         if "mongod.conf" in cmd_lower:
-            return "net:\n  port: 27017\n  bindIp: 127.0.0.1\n# POLICY: DO NOT CHANGE PORT. STACK REQUIRES 27017.", "", 0, 0.2
+            return (
+                "# mongod.conf — Generated by Ansible (v2.14.3)\n"
+                "# Last modified: 2024-01-12T19:45:00Z\n"
+                "storage:\n  dbPath: /var/lib/mongodb\n"
+                "net:\n  port: 27017\n  bindIp: 127.0.0.1\n"
+                "# POLICY: DO NOT CHANGE PORT. STACK REQUIRES 27017."
+            ), "", 0, 0.2
 
-        # --- 2. The Fix Application (Restarting the App) ---
-        if "pm2 restart" in cmd_lower or "systemctl restart" in cmd_lower or "restart" in cmd_lower:
+        # --- 3. Process Control: Start (Easy mode fix) ---
+        if "pm2 start" in cmd_lower:
+            if not self.node_running:
+                self.node_running = True
+                return (
+                    "[PM2] Spawning PM2 daemon with pm2_home=/home/sreuser/.pm2\n"
+                    "[PM2] PM2 Successfully daemonized\n"
+                    "┌────┬──────────┬─────┬──────┬───────┬──────────┐\n"
+                    "│ id │ name     │ mode│ ↺    │ status│ cpu      │\n"
+                    "├────┼──────────┼─────┼──────┼───────┼──────────┤\n"
+                    "│ 0  │ server   │ fork│ 0    │ online│ 0%       │\n"
+                    "└────┴──────────┴─────┴──────┴───────┴──────────┘"
+                ), "", 0, 0.5
+            return "[PM2] App [server] already launched. PID: 1242.", "", 0, 0.0
+
+        # --- 4. Process Control: Restart (Medium/Hard — apply config fix) ---
+        if "pm2 restart" in cmd_lower or "systemctl restart" in cmd_lower:
             if self.env_fixed_in_file:
-                self.mongo_port = 27017 # THE FIX IS APPLIED TO THE SERVER MEMORY
-                return "Restarting Node... Configuration applied successfully.", "", 0, 0.4
-            return "Restarting Node... (Warning: Error connecting to DB on 27018)", "", 0, 0.0
+                self.mongo_port = 27017
+                return (
+                    "[PM2] Applying changes to server (id: 0)...\n"
+                    "[PM2] [server] ✓ Restarted — configuration reloaded\n"
+                    "Status: online | PID: 1242 | Uptime: 0s"
+                ), "", 0, 0.4
+            return (
+                "[PM2] Restarting [server]...\n"
+                "[PM2][ERROR] MongoNetworkError: connect ECONNREFUSED 127.0.0.1:27018\n"
+                "Warning: Application restarted but database connection failed."
+            ), "", 0, 0.0
 
-        # --- 3. Navigation ---
-        if "pwd" in cmd_lower: return self._current_dir, "", 0, 0.0
+        # --- 5. Process Kill (Hard mode fix) ---
+        if "kill" in cmd_lower:
+            if "8891" in cmd_lower:
+                if self.rogue_pid_active:
+                    self.rogue_pid_active = False
+                    return "Process 8891 (kworker) terminated.", "", 0, 0.3
+                return "bash: kill: (8891) - No such process", "", 1, 0.0
+            return "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid [...]", "", 1, -0.05
+
+        # --- 6. Navigation ---
+        if "pwd" in cmd_lower:
+            return self._current_dir, "", 0, 0.0
         if "ls" in cmd_lower:
-            output = "total 12\n-rw-r--r-- .env\ndrwxr-xr-x logs/\n-rw-r--r-- server.js"
-            return output, "", 0, get_discovery_reward('ls', 0.1)
+            return (
+                "total 48\n"
+                "-rw-r--r-- 1 sreuser sreuser   412 Jan 15 03:20 .env\n"
+                "-rw-r--r-- 1 sreuser sreuser  2847 Jan 14 22:15 server.js\n"
+                "-rw-r--r-- 1 sreuser sreuser 18204 Jan 14 22:15 package-lock.json\n"
+                "drwxr-xr-x 2 sreuser sreuser  4096 Jan 15 03:20 logs/\n"
+                "drwxr-xr-x 2 sreuser sreuser  4096 Jan 14 22:15 config/\n"
+                "drwxr-xr-x 8 sreuser sreuser  4096 Jan 14 22:15 node_modules/"
+            ), "", 0, get_discovery_reward('ls', 0.1)
 
-        # --- 4. Logs ---
+        # --- 7. Logs (context-aware, with realistic noise) ---
         if "log" in cmd_lower or "error.log" in cmd_lower:
-            log_output = (
-                f"[ERROR] MongoNetworkError: failed to connect to [localhost:{self.mongo_port}]\n"
-                f"[HINT] Check application local config (.env) for port overrides."
-            )
-            return log_output, "", 0, get_discovery_reward('logs', 0.4)
+            if not self.node_running:
+                return (
+                    "[2024-01-15T05:14:02.331Z] [WARN] express-session deprecated: req.secret (node_modules/express-session/index.js:127)\n"
+                    "[2024-01-15T05:14:02.445Z] [INFO] MongoDB driver v4.13.0 initialized\n"
+                    "[2024-01-15T05:14:08.112Z] [ERROR] pm2: Process 'server' exited with code 1\n"
+                    "[2024-01-15T05:14:08.115Z] [ERROR] pm2: No processes are running.\n"
+                    "[2024-01-15T05:14:08.116Z] [HINT] Service appears to be stopped. Check 'pm2 status' or restart with 'pm2 start all'."
+                ), "", 0, get_discovery_reward('logs', 0.4)
 
-        # --- 5. Semantic Router: Networking & Processes ---
+            # Red herring warnings mixed with real error
+            log_lines = [
+                "[2024-01-15T05:12:33.021Z] [WARN] DeprecationWarning: Buffer() is deprecated. Use Buffer.alloc() instead. (node:23456)",
+                "[2024-01-15T05:12:33.055Z] [INFO] Express server initializing on port 3000...",
+                "[2024-01-15T05:12:33.089Z] [WARN] express-session deprecated: req.secret not set (node_modules/express-session/index.js:127)",
+                f"[2024-01-15T05:12:33.204Z] [ERROR] MongoNetworkError: failed to connect to server [localhost:{self.mongo_port}]",
+                f"[2024-01-15T05:12:33.205Z] [ERROR] MongoServerSelectionError: connect ECONNREFUSED 127.0.0.1:{self.mongo_port}",
+                "[2024-01-15T05:12:33.206Z] [WARN] Retrying database connection in 5000ms...",
+                "[2024-01-15T05:12:38.210Z] [ERROR] Max retries (3) exceeded for MongoDB connection.",
+            ]
+            if self.difficulty == "hard":
+                log_lines.append(
+                    "[2024-01-15T05:12:38.215Z] [WARN] High CPU detected on PID 8891 — possible crypto-miner or runaway process."
+                )
+            log_lines.append(
+                "[2024-01-15T05:12:38.220Z] [HINT] Check application config (.env) for port overrides. DB expects port 27017."
+            )
+            return "\n".join(log_lines), "", 0, get_discovery_reward('logs', 0.4)
+
+        # --- 8. System diagnostics ---
+        if "uptime" in cmd_lower:
+            return " 05:14:02 up 47 days,  3:22,  1 user,  load average: 0.82, 0.45, 0.31", "", 0, 0.0
+
+        if "free" in cmd_lower or "memory" in cmd_lower:
+            return (
+                "              total        used        free      shared  buff/cache   available\n"
+                "Mem:        8145920     3245104     1289472       65536     3611344     4578816\n"
+                "Swap:       2097148           0     2097148"
+            ), "", 0, 0.0
+
+        if "df" in cmd_lower:
+            return (
+                "Filesystem      Size  Used Avail Use% Mounted on\n"
+                "/dev/sda1        40G  22G   16G  58% /\n"
+                "tmpfs           3.9G     0  3.9G   0% /dev/shm"
+            ), "", 0, 0.0
+
+        # --- 9. Networking ---
         if any(tool in cmd_lower for tool in ["netstat", "ss", "lsof", "tcpdump"]):
-            output = (
-                "Active Internet connections\n"
-                "Proto Recv-Q Send-Q Local Address           State\n"
-                "tcp        0      0 127.0.0.1:27017         LISTEN\n"
-                "tcp        0      0 0.0.0.0:3000            LISTEN"
-            )
-            return output, "", 0, get_discovery_reward('network', 0.2)
+            lines = [
+                "Active Internet connections (only servers)",
+                "Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program",
+                "tcp        0      0 127.0.0.1:27017         0.0.0.0:*               LISTEN      452/mongod",
+            ]
+            if self.node_running:
+                lines.append("tcp        0      0 0.0.0.0:3000            0.0.0.0:*               LISTEN      1242/node")
+            if self.rogue_pid_active:
+                lines.append("tcp        0      0 0.0.0.0:4444            0.0.0.0:*               LISTEN      8891/kworker")
+            return "\n".join(lines), "", 0, get_discovery_reward('network', 0.2)
 
-        if any(tool in cmd_lower for tool in ["pm2", "ps", "top", "htop"]):
-            return "PID 1242: node server.js (Active)\nPID 452: mongod (Active)\nPID 8891: kworker (high cpu)", "", 0, get_discovery_reward('process', 0.2)
+        # --- 10. Process Listing (context-aware) ---
+        if any(tool in cmd_lower for tool in ["pm2 status", "pm2 list", "pm2 ls", "ps", "top", "htop"]):
+            procs = [
+                "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND",
+            ]
+            if self.node_running:
+                procs.append("sreuser   1242  1.2  3.8 723456 31024 ?        Sl   03:22   0:45 node server.js")
+            else:
+                procs.append("[PM2] No processes running. Use 'pm2 start all' to launch.")
+            procs.append("mongodb    452  0.8 12.1 987612 98456 ?        Ssl  03:22   1:12 /usr/bin/mongod --config /etc/mongod.conf")
+            if self.rogue_pid_active:
+                procs.append("root      8891 98.2  0.1  12345  1024 ?        R    04:55   8:32 [kworker/0:3+crypto]")
+            procs.append("sreuser   3392  0.0  0.1  21464  1204 pts/0    Ss   05:10   0:00 bash")
+            return "\n".join(procs), "", 0, get_discovery_reward('process', 0.2)
 
-        # --- 6. Config Inspection ---
+        # --- 11. Config Inspection ---
         if "cat" in cmd_lower and ".env" in cmd_lower:
-            # Show the state based on whether they edited it or not
             current_port = 27017 if self.env_fixed_in_file else self.mongo_port
-            return f"PORT=3000\nMONGO_URI=mongodb://localhost:{current_port}/app", "", 0, get_discovery_reward('env', 0.3)
+            env_content = (
+                "# Application Configuration\n"
+                "# Last updated: 2024-01-14 by deploy-bot\n"
+                f"PORT=3000\n"
+                f"MONGO_URI=mongodb://localhost:{current_port}/app\n"
+                "NODE_ENV=production\n"
+                "# NOTE: MONGO_URI port was updated to 27018 for staging migration.\n"
+                "# Revert to 27017 only if confirmed with the DBA team."
+            )
+            return env_content, "", 0, get_discovery_reward('env', 0.3)
 
-        # --- 7. Fallback ---
+        # --- 12. Config directory (Hard mode red herring) ---
+        if "cat" in cmd_lower and "config" in cmd_lower:
+            return (
+                "# config/database.yml — DO NOT EDIT MANUALLY\n"
+                "# Managed by Ansible playbook v2.14\n"
+                "production:\n"
+                "  adapter: mongodb\n"
+                "  host: localhost\n"
+                "  port: 27017  # canonical port\n"
+                "  database: app\n"
+                "  pool_size: 10"
+            ), "", 0, 0.05
+
+        # --- 13. Fallback ---
         if "which" in cmd_lower or "/bin/" in cmd_lower or "/usr/bin/" in cmd_lower:
             return f"/usr/bin/{cmd_lower.split()[-1]}", "", 0, 0.0
-            
+
         return "", f"bash: {cmd}: command not found", 127, -0.05
 
+    # ── File Write Handler ──
     def _handle_file_write(self, file_path: str, file_content: str):
         if (file_path or "").lower().endswith(".env"):
             if "27017" in (file_content or ""):
-                self.env_fixed_in_file = True # Change the file, but don't fix the server until restart
+                self.env_fixed_in_file = True
                 return "SUCCESS: .env updated. (Hint: Changes require a service restart to take effect).", "", 0, 0.4
             return "File updated, but port configuration remains invalid.", "", 0, 0.1
         return "", "Access Denied: You only have permission to edit app configs.", 1, -0.1
 
+    # ── Observation Builder ──
     def _build_observation(self, stdout, stderr, exit_code, health, reward, done):
-        return SREObservation(stdout=stdout, stderr=stderr, exit_code=exit_code, 
-                            current_directory=self._current_dir, system_health_check=health,
-                            done=done, reward=reward)
+        return SREObservation(
+            stdout=stdout, stderr=stderr, exit_code=exit_code,
+            current_directory=self._current_dir, system_health_check=health,
+            done=done, reward=reward
+        )
 
     @property
     def state(self) -> SREState:
-        return SREState(episode_id=self._episode_id, step_count=self._step_count,
-                        difficulty_level=self.difficulty, is_resolved=self._is_resolved)
+        return SREState(
+            episode_id=self._episode_id, step_count=self._step_count,
+            difficulty_level=self.difficulty, is_resolved=self._is_resolved
+        )

@@ -1,4 +1,40 @@
 spec_version: 1
 environment_id: sre_mern_triage
-description: A deterministic MERN stack triage simulator for SRE agents.
+description: >
+  A deterministic MERN stack triage simulator for SRE agents.
+  The agent must diagnose and resolve infrastructure failures across
+  three difficulty levels using shell commands and config management.
 docker_image: sre-mern-env:latest
+
+tasks:
+  - id: easy_node_down
+    difficulty: easy
+    description: Node.js service is stopped. Agent must start the PM2 process.
+  - id: medium_config_drift
+    difficulty: medium
+    description: MongoDB port mismatch in .env config. Agent must fix the port and restart.
+  - id: hard_hybrid_failure
+    difficulty: hard
+    description: Port mismatch plus a rogue high-CPU process causing gateway timeouts.
+
+action_space:
+  type: json
+  actions:
+    - execute_command
+    - write_file
+    - check_health
+
+observation_space:
+  fields:
+    - stdout
+    - stderr
+    - exit_code
+    - current_directory
+    - system_health_check
+    - reward
+    - done
+
+resource_limits:
+  vcpu: 2
+  memory_gb: 8
+  max_runtime_minutes: 20
