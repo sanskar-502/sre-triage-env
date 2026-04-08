@@ -301,7 +301,7 @@ The grader is a **hierarchical, deterministic health-check function** that maps 
 
 - Python 3.10+
 - Docker (for containerized deployment)
-- A Hugging Face API token (for baseline agent)
+- An LLM API key (Google Gemini free tier recommended, or HuggingFace)
 
 ### 1. Install Dependencies
 
@@ -359,7 +359,16 @@ curl http://localhost:7860/state
 ### 5. Run the Baseline Agent
 
 ```bash
+# Using Google Gemini (recommended — free tier)
+export API_KEY="your-gemini-api-key"
+export API_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
+export MODEL_NAME="gemini-2.5-flash-lite"
+python inference.py
+
+# Or using HuggingFace
 export HF_TOKEN="your-huggingface-token"
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
 python inference.py
 ```
 
@@ -443,40 +452,41 @@ Returns the current episode metadata.
 
 ## Baseline Agent
 
-The baseline agent (`inference.py`) uses the **Qwen/Qwen2.5-72B-Instruct** model via the Hugging Face Inference API to solve all 3 tasks.
+The baseline agent (`inference.py`) uses any OpenAI-compatible LLM (default: **Google Gemini 2.5 Flash Lite**) to solve all 3 tasks. It supports the hackathon evaluator's injected `API_BASE_URL` and `API_KEY`, falling back to `.env` for local development.
 
 ### How It Works
 
 1. **Multi-task loop**: Iterates through easy → medium → hard
-2. **LLM-powered reasoning**: Each step, the model receives the current observation and outputs a structured JSON action
+2. **LLM-powered reasoning**: Each step, the model receives the current observation and a task-specific solution guide, then outputs a structured JSON action
 3. **Mandatory logging**: Emits `[START]`, `[STEP]`, and `[END]` tags for automated judging
-4. **Error recovery**: Falls back to `check_health` on API failures
+4. **Error recovery**: Falls back to `check_health` on API failures with retry + exponential backoff
 5. **Resource-efficient**: 10-step limit per task, sync OpenAI client
+6. **Evaluator-compatible**: Reads `API_BASE_URL` and `API_KEY` from system environment first (for hackathon evaluation), only loads `.env` for local development
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HF_TOKEN` | ✅ Yes | — | Hugging Face API token |
-| `API_BASE_URL` | No | `https://router.huggingface.co/v1` | LLM API endpoint |
-| `MODEL_NAME` | No | `Qwen/Qwen2.5-72B-Instruct` | Model identifier |
+| `API_KEY` / `HF_TOKEN` | ✅ Yes | — | LLM API key (Gemini, HuggingFace, or evaluator-provided) |
+| `API_BASE_URL` | No | `https://generativelanguage.googleapis.com/v1beta/openai/` | LLM API endpoint |
+| `MODEL_NAME` | No | `gemini-2.5-flash-lite` | Model identifier |
 | `LOCAL_IMAGE_NAME` | No | `sre-mern-env:latest` | Docker image name |
+| `ENV_URL` | No | `http://localhost:7860` | Environment server URL (fallback) |
 
 ### Output Format
 
 ```
-[START] task=easy_node_down env=sre_mern_triage model=Qwen/Qwen2.5-72B-Instruct
-[STEP] step=1 action={"action_type":"execute_command","command":"pm2 status"} reward=0.18 done=false error=null
-[STEP] step=2 action={"action_type":"execute_command","command":"pm2 start all"} reward=1.48 done=true error=null
-[END] success=true steps=2 score=1.000 rewards=0.18,1.48
+[START] task=easy_node_down env=sre_mern_triage model=gemini-2.5-flash-lite
+[STEP] step=1 action={"action_type":"execute_command","command":"pm2 start all"} reward=1.48 done=true error=null
+[END] success=true steps=1 score=1.000 rewards=1.48
 
 📊 BASELINE EVALUATION REPORT CARD
 ============================================================
-  easy_node_down                 ✅ PASS  Score: 1.0  Steps: 2
-  medium_config_drift            ✅ PASS  Score: 1.0  Steps: 4
-  hard_hybrid_failure            ✅ PASS  Score: 1.0  Steps: 5
+  easy_node_down                 ✅ PASS  Score: 1.0  Steps: 1
+  medium_config_drift            ✅ PASS  Score: 1.0  Steps: 1
+  hard_hybrid_failure            ✅ PASS  Score: 1.0  Steps: 3
 
-  AGGREGATE SCORE                0.967
+  AGGREGATE SCORE                1.000
 ============================================================
 ```
 
@@ -490,7 +500,7 @@ sre-triage-env/
 ├── server/                     # Server-side environment package
 │   ├── __init__.py             # Package init + sys.path configuration
 │   ├── app.py                  # FastAPI server with main() entry point
-│   └── environment.py          # Core state machine (220 lines)
+│   └── environment.py          # Core state machine (314 lines)
 │
 ├── models.py                   # Pydantic models (Action, Observation, State)
 ├── client.py                   # OpenEnv EnvClient with reset(difficulty) override
