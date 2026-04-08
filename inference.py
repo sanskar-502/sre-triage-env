@@ -20,31 +20,20 @@ import time
 import textwrap
 from typing import List, Optional
 from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()  # For local dev; won't override existing env vars
 
 from client import SREEnvClient, SREAction
 
 # ── 1. CONFIGURATION ──
-# CRITICAL: The hackathon evaluator injects API_BASE_URL and API_KEY.
-# We MUST use those first. Only fall back to .env for local development.
-API_BASE_URL = os.environ.get("API_BASE_URL")
-API_KEY      = os.environ.get("API_KEY")
-MODEL_NAME   = os.environ.get("MODEL_NAME")
-
-# If evaluator vars are missing, load .env for local development
-if not API_BASE_URL or not API_KEY:
-    from dotenv import load_dotenv
-    load_dotenv()
-    API_BASE_URL = API_BASE_URL or os.getenv("API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-    API_KEY      = API_KEY or os.getenv("API_KEY") or os.getenv("HF_TOKEN")
-    MODEL_NAME   = MODEL_NAME or os.getenv("MODEL_NAME", "gemini-2.5-flash-lite")
-else:
-    MODEL_NAME = MODEL_NAME or "gemini-2.5-flash-lite"
-
-# Optional — if you use from_docker_image():
+# Matches the official sample: HF_TOKEN first, then API_KEY
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai/"
+MODEL_NAME   = os.getenv("MODEL_NAME") or "gemini-2.5-flash-lite"
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 if not API_KEY:
-    raise ValueError("API_KEY or HF_TOKEN is missing! Set it in your environment variables.")
+    raise ValueError("Set HF_TOKEN or API_KEY in your environment variables.")
 
 MAX_STEPS = 10
 
