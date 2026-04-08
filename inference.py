@@ -148,7 +148,7 @@ def get_model_action(llm_client: OpenAI, step: int, obs: dict, history: List[str
                 print(f"[DEBUG] Retry {attempt}/3 after {wait}s...", flush=True)
                 time.sleep(wait)
             completion = llm_client.chat.completions.create(
-                model=MODEL_NAME,
+                model=os.environ.get("MODEL_NAME", MODEL_NAME),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
@@ -172,7 +172,12 @@ TASKS = [
 
 # ── 6. MAIN EXECUTION ──
 async def main() -> None:
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Fetch dynamically at RUNTIME. If the evaluator imports this file before injecting env vars,
+    # global evaluation misses the injects.
+    api_base = os.environ.get("API_BASE_URL", API_BASE_URL)
+    api_key = os.environ.get("API_KEY", API_KEY)
+    
+    llm_client = OpenAI(base_url=api_base, api_key=api_key)
 
     env_url = os.getenv("ENV_URL")
 
