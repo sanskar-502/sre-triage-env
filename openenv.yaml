@@ -2,9 +2,9 @@ spec_version: 1
 name: sre_mern_triage
 environment_id: sre_mern_triage
 description: >
-  A deterministic MERN stack triage simulator for SRE agents.
-  The agent must diagnose and resolve infrastructure failures across
-  three difficulty levels using shell commands and config management.
+  A deterministic SRE triage benchmark for tool-using AI agents.
+  Agents diagnose and resolve infrastructure incidents across multiple
+  deterministic scenarios using shell commands and config changes.
 docker_image: sre-mern-env:latest
 
 tasks:
@@ -17,6 +17,12 @@ tasks:
   - id: hard_hybrid_failure
     difficulty: hard
     description: Port mismatch plus a rogue high-CPU process causing gateway timeouts.
+  - id: hard_bad_secret
+    difficulty: hard
+    description: JWT secret drift causes authentication failures until the secret is corrected and the service restarts.
+  - id: hard_disk_pressure
+    difficulty: hard
+    description: Disk pressure from oversized logs causes write failures until logs are rotated.
 
 action_space:
   type: json

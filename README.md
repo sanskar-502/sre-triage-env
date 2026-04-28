@@ -1,599 +1,161 @@
----
-title: SRE Triage Simulator
-emoji: 🔧
-colorFrom: red
-colorTo: yellow
-sdk: docker
-app_port: 7860
-tags:
-  - openenv
-  - reinforcement-learning
-  - sre
-  - infrastructure
-  - mern-stack
-  - triage
-pinned: false
----
+# SRE Triage Environment: Autonomous Agent Benchmark
 
-# 🔧 SRE Triage Simulator
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](#)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)](#)
+[![Pydantic](https://img.shields.io/badge/Pydantic-2.7%2B-e92063?logo=pydantic)](#)
+[![LiteLLM](https://img.shields.io/badge/LiteLLM-Multi--Model-purple)](#)
 
-> **A deterministic reinforcement learning environment for training AI agents to diagnose and resolve real-world infrastructure failures in a MERN stack application.**
+A deterministic, production-grade benchmarking environment designed to evaluate autonomous AI agents on realistic Site Reliability Engineering (SRE) and DevOps tasks.
 
-[![OpenEnv Spec](https://img.shields.io/badge/OpenEnv-v1%20Compliant-brightgreen)](https://openenv.dev)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](Dockerfile)
-[![Python](https://img.shields.io/badge/Python-3.11+-yellow)](pyproject.toml)
+## 🚀 Overview
 
----
+As the AI industry shifts toward autonomous, tool-using agents, evaluating their ability to execute complex, multi-step actions is critical. Most benchmarks rely on static Q&A or toy examples. 
 
-## 📋 Table of Contents
+**`sre-triage-env`** bridges this gap by providing an interactive, stateful environment where AI agents must:
+1. Parse system metrics and terminal logs (`stdout`/`stderr`).
+2. Hypothesize the root cause of MERN stack failures.
+3. Emit strictly typed and validated JSON actions (using Pydantic Structured Outputs) to execute shell commands, alter files, or check health.
+4. Restore service uptime within a constrained number of steps.
 
-- [Overview](#overview)
-- [Why SRE Triage?](#why-sre-triage)
-- [Architecture](#architecture)
-- [Task Definitions](#task-definitions)
-- [Action & Observation Spaces](#action--observation-spaces)
-- [Reward Design](#reward-design)
-- [Grading System](#grading-system)
-- [Quick Start](#quick-start)
-- [API Reference](#api-reference)
-- [Baseline Agent](#baseline-agent)
-- [File Structure](#file-structure)
-- [Configuration](#configuration)
-- [Deployment](#deployment)
+**Key Features:**
+- **Multi-Model Support:** Powered by `LiteLLM`, allowing seamless benchmarking against Claude 3.5 Sonnet, GPT-4o, Llama-3, Gemini, or any local vLLM/Ollama instance.
+- **Deterministic State Machine:** Simulated application states guarantee fair, repeatable agent evaluation without spinning up expensive cloud infrastructure.
+- **Type-Safe API:** Agents connect via a robust FastAPI backend. All interactions (`Action`, `Observation`, `State`) are strictly governed by Pydantic models.
+- **Production-Ready Packaging:** Structured as a modern, installable Python package (`src/sre_triage`), ensuring painless CI/CD and script execution.
 
 ---
 
-## Overview
+## 🏗️ Architecture
 
-The SRE Triage Simulator is a high-fidelity OpenEnv environment that simulates a **broken MERN (MongoDB, Express, React, Node.js) stack** on a Linux server. An AI agent takes the role of a Site Reliability Engineer (SRE), diagnosing and resolving infrastructure failures through structured terminal commands and configuration management.
+The project enforces a strict separation of concerns, decoupling the simulation engine from the API server and the LLM inference loop:
 
-Unlike toy environments or games, this system models a **real professional task** — the kind of incident response that SRE teams handle daily at companies like Google, Netflix, and Meta.
-
-### Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **3 Difficulty Levels** | Easy → Medium → Hard with genuine complexity progression |
-| **Deterministic State Machine** | 100% reproducible episodes for fair evaluation |
-| **Rich Reward Shaping** | Partial credit for diagnostic progress, not just binary success |
-| **Realistic Log Output** | Timestamps, red herrings, deprecation warnings — just like production |
-| **Efficiency Incentives** | Step penalties and repeat-command penalties encourage optimal behavior |
-| **Anti-Exploit Guards** | Destructive commands blocked, unauthorized installs penalized |
-
----
-
-## Why SRE Triage?
-
-```
-"The most expensive bug is the one that takes 3 hours to diagnose but 3 seconds to fix."
-```
-
-SRE triage is a uniquely suitable domain for RL/agent benchmarking because:
-
-1. **It's a real job** — Site Reliability Engineers at every major tech company perform this task daily
-2. **It requires multi-step reasoning** — Read logs → Identify root cause → Fix config → Restart services → Verify
-3. **There are clear success criteria** — HTTP 200 = system healthy, anything else = still broken
-4. **Difficulty scales naturally** — From a single stopped service to cascading multi-component failures
-5. **Red herrings exist** — Production logs are noisy. Agents must distinguish signal from noise
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    SRE Triage Simulator                      │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │   FastAPI     │◄───│ State Machine│    │ Programmatic │  │
-│  │   Server      │    │  (episode    │───►│   Grader     │  │
-│  │  (app.py)     │───►│   logic)     │    │  (health     │  │
-│  │               │    │ environment  │    │   check)     │  │
-│  └──────┬───────┘    │    .py       │    └──────────────┘  │
-│         │            └──────────────┘                       │
-│         │                    ▲                               │
-│    /reset  /step  /state     │                               │
-│         │                    │                               │
-│         ▼                    │                               │
-│  ┌──────────────┐    ┌──────┴───────┐                       │
-│  │  Pydantic     │    │  Typed       │                       │
-│  │  Models       │    │  Actions     │                       │
-│  │ (models.py)   │    │  & Obs       │                       │
-│  └──────────────┘    └──────────────┘                       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-          ▲                                    │
-          │         HTTP JSON API              │
-          │                                    ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Baseline Agent                           │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │  OpenAI       │    │  EnvClient   │    │  Multi-Task  │  │
-│  │  Client       │───►│  (client.py) │───►│  Loop        │  │
-│  │  (LLM calls)  │    │              │    │  (inference  │  │
-│  │               │    │              │    │     .py)     │  │
-│  └──────────────┘    └──────────────┘    └──────────────┘  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+```text
+src/sre_triage/
+├── api/            # FastAPI service exposing the interactive Agent API
+├── benchmark/      # Multi-model evaluation loop (LiteLLM + Structured Outputs)
+├── core/           # Deterministic environment engine & scenario state state-machine
+├── schemas/        # Pydantic models enforcing typed Action/Observation contracts
+├── telemetry/      # Structured logging and request metrics
+├── client.py       # SDK for external agents to connect to the environment
+└── settings.py     # Centralized Pydantic BaseSettings configuration
+tests/              # Comprehensive Pytest suite asserting API and engine behavior
+scripts/            # Deployment tooling (e.g., Hugging Face Space deployments)
 ```
 
 ---
 
-## Task Definitions
+## 📋 Task Catalog (The Benchmark)
 
-### 🟢 Easy — Node.js Service Down
+Agents are evaluated against increasingly difficult, realistic failure modes:
 
-| Property | Value |
-|----------|-------|
-| **Root Cause** | Node.js/PM2 process is stopped |
-| **Initial Health** | `HTTP 503 Service Unavailable` |
-| **Fix** | `pm2 start all` |
-| **Minimum Steps** | 1 |
-| **Agent Must** | Check process status → Start the service |
-
-```
-Agent: pm2 status → "No processes running"
-Agent: pm2 start all → "Process started successfully"
-Health: HTTP 200 OK ✅
-```
-
-### 🟡 Medium — Configuration Drift
-
-| Property | Value |
-|----------|-------|
-| **Root Cause** | `.env` has wrong MongoDB port (27018 instead of 27017) |
-| **Initial Health** | `HTTP 500 Internal Server Error` |
-| **Fix** | Edit `.env` to fix port + `pm2 restart all` |
-| **Minimum Steps** | 2 |
-| **Agent Must** | Read logs → Identify port mismatch → Fix config → Restart |
-
-**Challenge:** The `.env` file contains a misleading comment:
-```
-# NOTE: MONGO_URI port was updated to 27018 for staging migration.
-# Revert to 27017 only if confirmed with the DBA team.
-```
-The agent must reason that this comment is misleading and fix the port anyway.
-
-### 🔴 Hard — Hybrid Cascading Failure
-
-| Property | Value |
-|----------|-------|
-| **Root Cause** | Port mismatch + rogue crypto-mining process consuming 98% CPU |
-| **Initial Health** | `HTTP 500 Internal Server Error` |
-| **Fix** | Edit `.env` + `pm2 restart all` + `kill -9 8891` |
-| **Minimum Steps** | 3 |
-| **Agent Must** | Diagnose port issue + fix config + restart + identify and kill rogue process |
-
-**Challenge:** After fixing the config and restarting, the health check returns `HTTP 504 Gateway Timeout` instead of 200. The agent must investigate further, identify PID 8891 (`[kworker/0:3+crypto]`) consuming 98.2% CPU, and terminate it.
-
-```
-Step 1: cat logs/error.log → "MongoNetworkError... port 27018"
-                              "High CPU detected on PID 8891 — possible crypto-miner"
-Step 2: write_file .env → Fix MONGO_URI to port 27017
-Step 3: pm2 restart all → "Configuration reloaded"
-        Health: HTTP 504 Gateway Timeout (still broken!)
-Step 4: kill -9 8891 → "Process 8891 (kworker) terminated"
-        Health: HTTP 200 OK ✅
-```
+| Task ID | Difficulty | Failure Mode | Required Agent Intervention |
+| :--- | :--- | :--- | :--- |
+| `easy_node_down` | 🟢 Easy | Application process abruptly stopped. | Diagnose process state, start node/PM2. |
+| `medium_config_drift` | 🟡 Medium | MongoDB mapped port mismatch. | Inspect logs, fix `.env`, restart services. |
+| `hard_hybrid_failure` | 🔴 Hard | Port drift + rogue CPU-hogging process. | Fix `.env`, restart, identify and `kill` rogue PID. |
+| `hard_bad_secret` | 🔴 Hard | Invalid JWT cryptographic secret. | Inspect logs, rotate secret in config, restart. |
+| `hard_disk_pressure` | 🔴 Hard | Disk exhaustion from unrotated logs. | Identify disk space issue, execute `logrotate` / clear logs. |
 
 ---
 
-## Action & Observation Spaces
+## 💻 Getting Started
 
-### Action Space (Structured JSON)
+### 1. Installation
 
+Clone the repository and install the package with modern Python tooling:
+
+```bash
+python -m pip install --upgrade pip
+pip install -e .[dev]
+```
+
+### 2. Start the Environment Server
+
+The environment runs as a standalone FastAPI service. If agents make changes, they alter the simulated state on this server.
+
+```bash
+# Starts the server on http://localhost:7860
+sre-triage-server
+```
+
+*(Alternatively, run `python -m uvicorn sre_triage.api.app:app --host 0.0.0.0 --port 7860`)*
+
+### 3. Run the LLM Agent Benchmark
+
+You can evaluate any LLM immediately using the built-in benchmarking tool. Simply export your API key and URL.
+
+```bash
+# Example for OpenAI's GPT-4o
+export API_KEY="sk-..."
+export MODEL_NAME="gpt-4o"
+sre-triage-benchmark
+
+# Example for Anthropic Claude 3.5
+export API_KEY="sk-ant-..."
+export MODEL_NAME="claude-3-5-sonnet-20240620"
+sre-triage-benchmark
+
+# Example for Local Ollama Model
+export API_BASE_URL="http://localhost:11434/v1"
+export MODEL_NAME="ollama/llama3"
+sre-triage-benchmark
+```
+*Note: Because the benchmark relies on native Pydantic Structured Outputs via LiteLLM, model responses are guaranteed to be syntactically valid JSON.*
+
+---
+
+## 🤖 For Agent Developers (API Surface)
+
+Building your own custom agent? Connect to the environment using standard HTTP calls or our provided `SREEnvClient`.
+
+**Endpoints:**
+- `POST /reset` — Resets the environment. Provide `{"task_id":"hard_bad_secret"}`.
+- `POST /step` — Submit an `SREAction` (see schema below) and receive an `SREObservation`.
+- `GET /state` — Inspect current environment step count and active scenario details.
+- `GET /health` — Check if the MERN stack is returning `200 OK`.
+
+**Action Schema:**
+Agents must emit this exact Pydantic structure inside their JSON response:
 ```json
 {
-  "thought": "My reasoning about what to do next",
-  "action_type": "execute_command | write_file | check_health",
-  "command": "shell command (required for execute_command)",
-  "file_path": "path to file (required for write_file)",
-  "file_content": "new file content (required for write_file)"
-}
-```
-
-| Action Type | Description | Example |
-|-------------|-------------|---------|
-| `execute_command` | Run a shell command | `{"action_type": "execute_command", "command": "pm2 status"}` |
-| `write_file` | Write/overwrite a file | `{"action_type": "write_file", "file_path": ".env", "file_content": "PORT=3000\nMONGO_URI=mongodb://localhost:27017/app"}` |
-| `check_health` | Trigger a health check | `{"action_type": "check_health"}` |
-
-### Supported Commands
-
-| Category | Commands | Discovery Reward |
-|----------|----------|-----------------|
-| **Process Management** | `pm2 status`, `pm2 start`, `pm2 restart`, `ps aux`, `top` | +0.2 |
-| **Log Inspection** | `cat logs/error.log`, `cat logs/access.log` | +0.4 |
-| **Network Diagnostics** | `netstat -tlnp`, `ss -tlnp`, `lsof -i` | +0.2 |
-| **Config Inspection** | `cat .env`, `cat config/database.yml` | +0.3 |
-| **Service Management** | `systemctl status mongod`, `cat /etc/mongod.conf` | +0.1–0.2 |
-| **System Diagnostics** | `uptime`, `free -m`, `df -h`, `pwd`, `ls` | +0.0–0.1 |
-| **Process Control** | `kill -9 <PID>` | +0.3 |
-| **Blocked** | `rm`, `drop`, `apt`, `yum` | −0.1 to −0.2 |
-
-### Observation Space
-
-```json
-{
-  "stdout": "Standard output from the command",
-  "stderr": "Standard error (empty on success)",
-  "exit_code": 0,
-  "current_directory": "/var/www/mern-app",
-  "system_health_check": "HTTP 503 Service Unavailable",
-  "reward": 0.18,
-  "done": false
+  "thought": "The port in the .env file is wrong. I need to update it.",
+  "action_type": "write_file",  // "execute_command" | "write_file" | "check_health"
+  "command": null,
+  "file_path": "/var/www/mern-app/.env",
+  "file_content": "MONGO_PORT=27017\n..."
 }
 ```
 
 ---
 
-## Reward Design
+## 🐳 Deployment
 
-The reward function provides **meaningful signal throughout the trajectory**, not just sparse binary success/failure.
-
-### Reward Components
-
-| Component | Value | When |
-|-----------|-------|------|
-| **Discovery rewards** | +0.1 to +0.4 | First time agent inspects a new diagnostic category |
-| **Fix rewards** | +0.3 to +0.5 | Agent applies a correct fix (start service, fix config, kill process) |
-| **Success bonus** | +1.0 | Health check returns HTTP 200 (episode complete) |
-| **Step penalty** | −0.02 | Applied every step to encourage efficiency |
-| **Repeat penalty** | −0.1 | Agent runs the exact same command consecutively |
-| **Destructive penalty** | −0.2 | Agent attempts `rm`, `drop`, or other destructive commands |
-| **Install penalty** | −0.1 | Agent attempts `apt install`, `yum install`, etc. |
-| **Unknown command** | −0.05 | Agent runs a command the environment doesn't recognize |
-
-### Example Reward Trajectory (Medium Difficulty)
-
-```
-Step 1: cat logs/error.log  → reward = +0.40 - 0.02 = +0.38  (discovery: logs)
-Step 2: cat .env            → reward = +0.30 - 0.02 = +0.28  (discovery: config)
-Step 3: write_file .env     → reward = +0.40 - 0.02 = +0.38  (correct fix)
-Step 4: pm2 restart all     → reward = +0.40 + 1.0 - 0.02 = +1.38  (apply + success!)
-                              ────────
-                              Total: +2.42
-```
-
-### Episode Boundaries
-
-- **Success**: Health check returns `HTTP 200 OK` → `done = true`
-- **Timeout**: 15 steps reached without resolution → `done = true`, no success bonus
-- **No early termination**: Agent can always keep trying until timeout
-
----
-
-## Grading System
-
-The grader is a **hierarchical, deterministic health-check function** that maps system state to HTTP status codes:
-
-```
-┌─────────────────────────┐
-│ Node.js running?        │──── No ──→ HTTP 503 Service Unavailable
-│                         │
-│         Yes             │
-│         ▼               │
-│ MongoDB port correct?   │──── No ──→ HTTP 500 Internal Server Error
-│                         │
-│         Yes             │
-│         ▼               │
-│ Rogue process active?   │── Yes ──→ HTTP 504 Gateway Timeout
-│                         │
-│         No              │
-│         ▼               │
-│   HTTP 200 OK ✅        │
-└─────────────────────────┘
-```
-
-| Health Code | Meaning | Fix Required |
-|-------------|---------|-------------|
-| `503` | Node.js service is down | `pm2 start all` |
-| `500` | Database connection misconfigured | Fix `.env` + `pm2 restart` |
-| `504` | Rogue process causing timeouts | `kill -9 <PID>` |
-| `200` | All systems operational | Episode complete ✅ |
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.10+
-- Docker (for containerized deployment)
-- An LLM API key (Google Gemini free tier recommended, or HuggingFace)
-
-### 1. Install Dependencies
+The environment is strictly containerized, making it an excellent platform for cloud-native benchmarking.
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Windows: .\venv\Scripts\activate
-pip install -r requirements.txt
+# Build the production image
+docker build -t sre-triage-env:latest .
+
+# Run the container
+docker run -p 7860:7860 sre-triage-env:latest
 ```
 
-### 2. Run Tests
+To deploy to a public URL (like a Hugging Face Space), use the included utility script:
+```bash
+export HF_SPACE_REPO_ID="your-username/sre-triage-env"
+python scripts/deploy_hf.py
+```
+
+---
+
+## 📝 Running Tests
+
+To ensure the deterministic core logic behaves exactly as expected, run the comprehensive `pytest` suite:
 
 ```bash
-python test_logic.py
-```
-
-Expected output:
-```
-✅ Easy — Node service stopped: PASSED
-✅ Medium — Configuration drift: PASSED
-✅ Hard — Hybrid failure: PASSED
-✅ Dynamic reset(difficulty): PASSED
-✅ Step penalty works
-✅ Repeat penalty works
-✅ Logs contain timestamps and red herrings
-🎉 ALL TESTS PASSED
-```
-
-### 3. Start the Server
-
-```bash
-# Via uv (recommended)
-uv run server
-
-# Or via uvicorn directly
-uvicorn server.app:app --host 0.0.0.0 --port 7860
-```
-
-### 4. Test Endpoints
-
-```bash
-# Reset (initialize a new episode)
-curl -X POST http://localhost:7860/reset \
-  -H "Content-Type: application/json" \
-  -d '{"difficulty": "easy"}'
-
-# Step (send an action)
-curl -X POST http://localhost:7860/step \
-  -H "Content-Type: application/json" \
-  -d '{"action": {"action_type": "execute_command", "command": "pm2 status"}}'
-
-# State (get episode metadata)
-curl http://localhost:7860/state
-```
-
-### 5. Run the Baseline Agent
-
-```bash
-# Using Google Gemini (recommended — free tier)
-export API_KEY="your-gemini-api-key"
-export API_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
-export MODEL_NAME="gemini-2.5-flash-lite"
-python inference.py
-
-# Or using HuggingFace
-export HF_TOKEN="your-huggingface-token"
-export API_BASE_URL="https://router.huggingface.co/v1"
-export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
-python inference.py
+pytest tests/ -v
 ```
 
 ---
-
-## API Reference
-
-### `POST /reset`
-
-Initializes a new episode with the specified difficulty.
-
-**Request Body:**
-```json
-{"difficulty": "easy"}  // "easy", "medium", or "hard"
-```
-
-**Response:**
-```json
-{
-  "observation": {
-    "stdout": "Terminal session started. Type commands to investigate.",
-    "stderr": "",
-    "exit_code": 0,
-    "current_directory": "/var/www/mern-app",
-    "system_health_check": "HTTP 503 Service Unavailable",
-    "done": false,
-    "reward": 0.0
-  },
-  "reward": 0.0,
-  "done": false
-}
-```
-
-### `POST /step`
-
-Executes an action and returns the new observation.
-
-**Request Body:**
-```json
-{
-  "action": {
-    "thought": "Checking process status",
-    "action_type": "execute_command",
-    "command": "pm2 status"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "observation": {
-    "stdout": "USER       PID %CPU %MEM ...\nsreuser   1242  1.2  3.8 ... node server.js",
-    "stderr": "",
-    "exit_code": 0,
-    "current_directory": "/var/www/mern-app",
-    "system_health_check": "HTTP 500 Internal Server Error",
-    "done": false,
-    "reward": 0.18
-  },
-  "reward": 0.18,
-  "done": false
-}
-```
-
-### `GET /state`
-
-Returns the current episode metadata.
-
-**Response:**
-```json
-{
-  "episode_id": "851ade5c-a169-4dbe-8d00-4db94b4d824d",
-  "step_count": 1,
-  "difficulty_level": "medium",
-  "is_resolved": false
-}
-```
-
----
-
-## Baseline Agent
-
-The baseline agent (`inference.py`) uses any OpenAI-compatible LLM (default: **Google Gemini 2.5 Flash Lite**) to solve all 3 tasks. It supports the hackathon evaluator's injected `API_BASE_URL` and `API_KEY`, falling back to `.env` for local development.
-
-### How It Works
-
-1. **Multi-task loop**: Iterates through easy → medium → hard
-2. **LLM-powered reasoning**: Each step, the model receives the current observation and a task-specific solution guide, then outputs a structured JSON action
-3. **Mandatory logging**: Emits `[START]`, `[STEP]`, and `[END]` tags for automated judging
-4. **Error recovery**: Falls back to `check_health` on API failures with retry + exponential backoff
-5. **Resource-efficient**: 10-step limit per task, sync OpenAI client
-6. **Evaluator-compatible**: Reads `API_BASE_URL` and `API_KEY` from system environment first (for hackathon evaluation), only loads `.env` for local development
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `API_KEY` / `HF_TOKEN` | ✅ Yes | — | LLM API key (Gemini, HuggingFace, or evaluator-provided) |
-| `API_BASE_URL` | No | `https://generativelanguage.googleapis.com/v1beta/openai/` | LLM API endpoint |
-| `MODEL_NAME` | No | `gemini-2.5-flash-lite` | Model identifier |
-| `LOCAL_IMAGE_NAME` | No | `sre-mern-env:latest` | Docker image name |
-| `ENV_URL` | No | `http://localhost:7860` | Environment server URL (fallback) |
-
-### Output Format
-
-```
-[START] task=easy_node_down env=sre_mern_triage model=gemini-2.5-flash-lite
-[STEP] step=1 action={"action_type":"execute_command","command":"pm2 start all"} reward=1.48 done=true error=null
-[END] success=true steps=1 score=1.000 rewards=1.48
-
-📊 BASELINE EVALUATION REPORT CARD
-============================================================
-  easy_node_down                 ✅ PASS  Score: 1.0  Steps: 1
-  medium_config_drift            ✅ PASS  Score: 1.0  Steps: 1
-  hard_hybrid_failure            ✅ PASS  Score: 1.0  Steps: 3
-
-  AGGREGATE SCORE                1.000
-============================================================
-```
-
----
-
-## File Structure
-
-```
-sre-triage-env/
-│
-├── server/                     # Server-side environment package
-│   ├── __init__.py             # Package init + sys.path configuration
-│   ├── app.py                  # FastAPI server with main() entry point
-│   └── environment.py          # Core state machine (314 lines)
-│
-├── models.py                   # Pydantic models (Action, Observation, State)
-├── client.py                   # OpenEnv EnvClient with reset(difficulty) override
-├── inference.py                # Baseline agent with multi-task evaluation loop
-├── test_logic.py               # Comprehensive unit test suite
-│
-├── Dockerfile                  # Production container (python:3.11-slim, UID 1000)
-├── .dockerignore               # Excludes venv, cache, tests from build context
-├── requirements.txt            # Python dependencies
-├── pyproject.toml              # Package metadata + [project.scripts] entry point
-├── uv.lock                     # Deterministic dependency lock file
-├── openenv.yaml                # OpenEnv manifest with task definitions
-└── README.md                   # This file
-```
-
----
-
-## Configuration
-
-### Resource Requirements
-
-| Resource | Limit |
-|----------|-------|
-| vCPU | 2 |
-| Memory | 8 GB |
-| Max Runtime | 20 minutes |
-| Max Steps per Task | 10 (inference) / 15 (environment timeout) |
-
-### Docker Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `7860` | Server listen port |
-| `WORKERS` | `2` | Uvicorn worker count |
-
----
-
-## Deployment
-
-### Deploy to Hugging Face Spaces
-
-1. **Create a new Space** on [huggingface.co/new-space](https://huggingface.co/new-space)
-   - SDK: **Docker**
-   - Visibility: Public
-
-2. **Push your code:**
-   ```bash
-   openenv push --repo-id your-username/sre-triage-env
-   ```
-
-3. **Add secrets** in Space Settings → Variables and Secrets:
-   - `HF_TOKEN` — your Hugging Face API token
-
-4. **Verify** once the build completes:
-   ```bash
-   curl -X POST https://your-space.hf.space/reset -H "Content-Type: application/json" -d '{}'
-   ```
-
-### Run the Pre-Submission Validator
-
-```bash
-./validate-submission.sh https://your-space.hf.space .
-```
-
-Expected output:
-```
-[PASSED] HF Space is live and responds to /reset
-[PASSED] Docker build succeeded
-[PASSED] openenv validate passed
-All 3/3 checks passed! Your submission is ready to submit.
-```
-
----
-
-## OpenEnv Compliance
-
-| Requirement | Status |
-|-------------|--------|
-| `openenv validate` passes | ✅ `[OK] Ready for multi-mode deployment` |
-| Typed Pydantic models | ✅ `SREAction(Action)`, `SREObservation(Observation)`, `SREState(State)` |
-| `step()` / `reset()` / `state()` | ✅ All implemented |
-| `openenv.yaml` manifest | ✅ With 3 task definitions |
-| `pyproject.toml` + `uv.lock` | ✅ For reproducible builds |
-| `[project.scripts]` server entry | ✅ `server = "server.app:main"` |
-| `from_docker_image()` support | ✅ Via `EnvClient` base class |
-| `Dockerfile` at root | ✅ `python:3.11-slim`, UID 1000, port 7860 |
-
----
-
-## License
-
-MIT
-
----
-
-*Built for the [OpenEnv Hackathon](https://openenv.dev) — Training AI agents for real-world tasks.*
+*Built as a state-of-the-art framework for the next generation of autonomous engineering agents.*

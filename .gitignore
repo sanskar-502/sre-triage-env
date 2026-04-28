@@ -24,3 +24,8 @@ Thumbs.db
 # Testing artifacts
 verify_checklist.py
 test_local.py
+
+# Tooling output
+.pytest_cache/
+htmlcov/
+coverage.xml

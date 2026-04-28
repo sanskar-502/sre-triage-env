@@ -6,8 +6,8 @@ venv/
 .gitignore
 .env
 *.egg-info/
-test_*.py
-verify_*.py
 uv.lock
-README.md
 .dockerignore
+outputs/
+tests/
+.github/
