@@ -14,7 +14,6 @@ WORKDIR $HOME/app
 
 COPY --chown=sreuser pyproject.toml requirements.txt README.md ./
 COPY --chown=sreuser src ./src
-COPY --chown=sreuser server ./server
 COPY --chown=sreuser openenv.yaml ./
 RUN pip install --upgrade pip && pip install .
 
