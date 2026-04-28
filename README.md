@@ -1,3 +1,12 @@
+---
+title: SRE Triage Env
+emoji: 🛠️
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+app_port: 7860
+---
 # SRE Triage Environment: Autonomous Agent Benchmark
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
